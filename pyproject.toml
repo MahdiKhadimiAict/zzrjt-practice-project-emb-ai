@@ -36,7 +36,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/IBM/ibm-watson-nlp-lib"
+Homepage = "https://github.com/MahdiKhadimiAict/zzrjt-practice-project-emb-ai"
 
 [tool.setuptools]
 packages = ["EmotionDetection"]

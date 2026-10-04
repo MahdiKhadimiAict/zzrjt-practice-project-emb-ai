@@ -75,6 +75,20 @@ def fixture_reset_watson_cooldown() -> Any:
     emotion_detection._watson_retry_after = 0.0
 
 
+@pytest.fixture(autouse=True)
+def fixture_reset_local_classifier_cache() -> Any:
+    """Clear the memoised local pipeline so no test inherits a loaded model.
+
+    ``_local_classifier`` is ``lru_cache`` decorated, so without this a real
+    pipeline built by one test would leak into the next one.
+
+    :yields: Nothing; the fixture only brackets each test.
+    """
+    emotion_detection._local_classifier.cache_clear()
+    yield
+    emotion_detection._local_classifier.cache_clear()
+
+
 @pytest.fixture(name="app_client")
 def fixture_app_client() -> Any:
     """Provide a Flask test client bound to the emotion detector app.
@@ -95,6 +109,23 @@ def fixture_watson_scores() -> Any:
     scores = dict(WATSON_EMOTION_SCORES)
     with patch.object(emotion_detection, "_watson_scores", return_value=scores) as stub:
         yield stub
+
+
+@pytest.fixture(name="fake_local_pipeline")
+def fixture_fake_local_pipeline() -> Any:
+    """Pin the local backend to a stubbed transformer pipeline factory.
+
+    The stub classifier answers with a small, deterministic GoEmotions score set
+    so the fallback path never downloads a model.
+
+    :yields: The patched ``_transformer_pipeline``.
+    """
+    with patch.object(emotion_detection, "_transformer_pipeline") as factory:
+        factory.return_value = lambda text: [
+            {"label": "joy", "score": 0.8},
+            {"label": "anger", "score": 0.2},
+        ]
+        yield factory
 
 
 class TestValidateText:
@@ -171,6 +202,44 @@ class TestGoEmotionsAggregation:
 
     def test_returns_none_when_everything_is_unmapped(self) -> None:
         assert emotion_detection._aggregate_goemotions({"neutral": 0.9}) is None
+
+
+class TestFlattenPredictions:
+    """Tests for reading the shape variants a transformers pipeline can return."""
+
+    def test_accepts_a_single_mapping(self) -> None:
+        result = emotion_detection._flatten_predictions({"label": "joy", "score": 0.9})
+        assert result == {"joy": 0.9}
+
+    def test_accepts_a_list_of_mappings(self) -> None:
+        result = emotion_detection._flatten_predictions(
+            [{"label": "joy", "score": 0.9}, {"label": "anger", "score": 0.1}]
+        )
+        assert result == {"joy": 0.9, "anger": 0.1}
+
+    def test_unwraps_a_single_item_batch(self) -> None:
+        batched = [[{"label": "joy", "score": 0.9}, {"label": "anger", "score": 0.1}]]
+        assert emotion_detection._flatten_predictions(batched) == {"joy": 0.9, "anger": 0.1}
+
+    @pytest.mark.parametrize("predictions", ["joy", None, 42, [], [42], [None]])
+    def test_ignores_anything_it_cannot_read(self, predictions: Any) -> None:
+        assert not emotion_detection._flatten_predictions(predictions)
+
+    def test_skips_entries_missing_a_label_or_a_score(self) -> None:
+        result = emotion_detection._flatten_predictions(
+            [{"label": "joy", "score": 0.9}, {"label": "anger"}, {"score": 0.5}, "junk"]
+        )
+        assert result == {"joy": 0.9}
+
+    def test_coerces_string_labels_and_numeric_scores(self) -> None:
+        result = emotion_detection._flatten_predictions([{"label": 7, "score": "0.25"}])
+        assert result == {"7": 0.25}
+
+    def test_keeps_the_last_score_for_a_repeated_label(self) -> None:
+        result = emotion_detection._flatten_predictions(
+            [{"label": "joy", "score": 0.9}, {"label": "joy", "score": 0.3}]
+        )
+        assert result == {"joy": 0.3}
 
 
 class TestWatsonBackend:
@@ -290,6 +359,56 @@ class TestEmotionDetector:
         assert "transformers" in str(excinfo.value)
 
 
+class TestLocalBackend:
+    """Tests for building and driving the local GoEmotions fallback."""
+
+    def test_passes_the_documented_pipeline_arguments(self, fake_local_pipeline: Any) -> None:
+        emotion_detection._local_classifier()
+        kwargs = fake_local_pipeline.call_args.kwargs
+        assert kwargs["task"] == "text-classification"
+        assert kwargs["model"] == emotion_detection.LOCAL_MODEL_ID
+        assert kwargs["top_k"] is None
+        assert kwargs["function_to_apply"] == "sigmoid"
+
+    def test_memoises_the_pipeline(self, fake_local_pipeline: Any) -> None:
+        assert emotion_detection._local_classifier() is emotion_detection._local_classifier()
+        fake_local_pipeline.assert_called_once()
+
+    def test_wraps_a_failing_pipeline_build(self) -> None:
+        with patch.object(
+            emotion_detection, "_transformer_pipeline", side_effect=OSError("no weights")
+        ):
+            with pytest.raises(EmotionModelUnavailableError) as excinfo:
+                emotion_detection._local_classifier()
+        assert "no weights" in str(excinfo.value)
+
+    @pytest.mark.usefixtures("fake_local_pipeline")
+    def test_goemotions_scores_reads_the_pipeline_output(self) -> None:
+        assert emotion_detection._goemotions_scores("text") == {"joy": 0.8, "anger": 0.2}
+
+    def test_wraps_a_failing_scoring_call(self, fake_local_pipeline: Any) -> None:
+        def explode(text: str) -> Any:
+            raise RuntimeError("model exploded")
+
+        fake_local_pipeline.return_value = explode
+        with pytest.raises(EmotionModelUnavailableError) as excinfo:
+            emotion_detection._goemotions_scores("text")
+        assert "model exploded" in str(excinfo.value)
+
+    @pytest.mark.usefixtures("fake_local_pipeline")
+    def test_local_scores_aggregates_onto_the_five_labels(self) -> None:
+        result = emotion_detection._local_scores("text")
+        assert set(result) == set(EMOTION_LABELS)
+        assert result["joy"] == pytest.approx(0.8)
+        assert result["anger"] == pytest.approx(0.2)
+
+    def test_local_scores_raises_without_usable_output(self, fake_local_pipeline: Any) -> None:
+        fake_local_pipeline.return_value = lambda text: [{"label": "neutral", "score": 0.9}]
+        with pytest.raises(EmotionModelUnavailableError) as excinfo:
+            emotion_detection._local_scores("text")
+        assert "no scores" in str(excinfo.value)
+
+
 class TestBackendStatus:
     """Tests for engine selection and the health summary."""
 
@@ -334,6 +453,17 @@ class TestServerRoutes:
         assert response.status_code == 200
         assert "dominant emotion is joy" in response.get_data(as_text=True)
 
+    @pytest.mark.usefixtures("watson_scores")
+    def test_form_encoded_body_is_accepted(self, app_client: Any) -> None:
+        response = app_client.post("/emotionDetector", data={"textToAnalyse": "I am glad"})
+        assert response.status_code == 200
+        assert "dominant emotion is joy" in response.get_data(as_text=True)
+
+    def test_non_object_json_body_returns_400(self, app_client: Any) -> None:
+        response = app_client.post("/emotionDetector", json=["I am glad"])
+        assert response.status_code == 400
+        assert response.get_json()["error"]["code"] == "invalid_input"
+
     def test_blank_input_returns_400(self, app_client: Any) -> None:
         response = app_client.get("/emotionDetector?textToAnalyse=")
         assert response.status_code == 400
@@ -373,6 +503,28 @@ class TestServerRoutes:
         payload = response.get_json()
         assert payload["status"] == "ok"
         assert payload["backends"]["emotion_labels"] == list(EMOTION_LABELS)
+
+    def test_uncaught_emotion_error_uses_the_app_error_handler(
+        self, app_client: Any
+    ) -> None:
+        with patch.object(
+            server, "render_template", side_effect=EmotionDetectionError("boom")
+        ):
+            response = app_client.get("/")
+        assert response.status_code == 500
+        assert response.get_json()["error"]["code"] == "model_unavailable"
+
+    def test_unhandled_error_returns_a_json_500(self, app_client: Any) -> None:
+        server.app.config["PROPAGATE_EXCEPTIONS"] = False
+        try:
+            with patch.object(server, "render_template", side_effect=RuntimeError("boom")):
+                response = app_client.get("/")
+        finally:
+            server.app.config["PROPAGATE_EXCEPTIONS"] = None
+        assert response.status_code == 500
+        payload = response.get_json()
+        assert payload["error"]["code"] == "internal_error"
+        assert payload["error"]["status"] == 500
 
     def test_format_result_matches_the_documented_sentence(self) -> None:
         result: Dict[str, Any] = dict.fromkeys(EMOTION_LABELS, 0.0)

@@ -15,9 +15,9 @@ const ENDPOINT = "/emotionDetector";
  * @param {string} [variant] - Bootstrap contextual class suffix.
  */
 function renderResult(html, variant) {
-    const panel = document.getElementById("system_response");
-    panel.className = "result-panel" + (variant ? " result-" + variant : "");
-    panel.innerHTML = html;
+  const panel = document.getElementById("system_response");
+  panel.className = "result-panel" + (variant ? " result-" + variant : "");
+  panel.innerHTML = html;
 }
 
 /**
@@ -27,22 +27,26 @@ function renderResult(html, variant) {
  * @returns {string} Markup describing the failure.
  */
 function renderError(payload) {
-    const error = (payload && payload.error) || {};
-    const status = error.status || "";
-    const message = error.message || "The request could not be completed.";
-    return (
-        "<p class='mb-1'><strong>Error " + status + "</strong></p>" +
-        "<p class='mb-0'>" + message + "</p>"
-    );
+  const error = (payload && payload.error) || {};
+  const status = error.status || "";
+  const message = error.message || "The request could not be completed.";
+  return (
+    "<p class='mb-1'><strong>Error " +
+    status +
+    "</strong></p>" +
+    "<p class='mb-0'>" +
+    message +
+    "</p>"
+  );
 }
 
 /**
  * Disable the submit button and show a pending state.
  */
 function setBusy(busy) {
-    const button = document.getElementById("detectButton");
-    button.disabled = busy;
-    button.textContent = busy ? "Analyzing..." : "Run Emotion Detection";
+  const button = document.getElementById("detectButton");
+  button.disabled = busy;
+  button.textContent = busy ? "Analyzing..." : "Run Emotion Detection";
 }
 
 /**
@@ -56,12 +60,12 @@ function setBusy(busy) {
  * @returns {Promise<{raw: string, payload: Object|null}>} Body in both forms.
  */
 async function readBody(response) {
-    const raw = await response.text();
-    try {
-        return { raw: raw, payload: JSON.parse(raw) };
-    } catch (parseError) {
-        return { raw: raw, payload: null };
-    }
+  const raw = await response.text();
+  try {
+    return { raw: raw, payload: JSON.parse(raw) };
+  } catch (parseError) {
+    return { raw: raw, payload: null };
+  }
 }
 
 /**
@@ -70,48 +74,55 @@ async function readBody(response) {
  * @returns {Promise<void>} Resolves once the result panel has been updated.
  */
 async function RunSentimentAnalysis() {
-    const text = document.getElementById("textToAnalyze").value;
+  const text = document.getElementById("textToAnalyze").value;
 
-    if (!text.trim()) {
-        renderResult(
-            "<p class='mb-0'>Please enter some text before running the analysis.</p>",
-            "error"
-        );
-        return;
+  if (!text.trim()) {
+    renderResult("<p class='mb-0'>Invalid input! Try again. </p>", "error");
+    return;
+  }
+
+  setBusy(true);
+  renderResult("<p class='mb-0'>Analyzing feedback...</p>");
+
+  try {
+    const response = await fetch(
+      ENDPOINT + "?textToAnalyse=" + encodeURIComponent(text),
+      {
+        method: "GET",
+        headers: { Accept: "application/json, text/plain" },
+      },
+    );
+    const body = await readBody(response);
+
+    if (response.ok) {
+      renderResult("<p class='mb-0'>" + body.raw + "</p>", "success");
+    } else if (body.payload) {
+      renderResult(renderError(body.payload), "error");
+    } else {
+      renderResult(
+        "<p class='mb-0'>Request failed with HTTP " + response.status + ".</p>",
+        "error",
+      );
     }
-
-    setBusy(true);
-    renderResult("<p class='mb-0'>Analyzing feedback...</p>");
-
-    try {
-        const response = await fetch(ENDPOINT + "?textToAnalyse=" + encodeURIComponent(text), {
-            method: "GET",
-            headers: { Accept: "application/json, text/plain" }
-        });
-        const body = await readBody(response);
-
-        if (response.ok) {
-            renderResult("<p class='mb-0'>" + body.raw + "</p>", "success");
-        } else if (body.payload) {
-            renderResult(renderError(body.payload), "error");
-        } else {
-            renderResult("<p class='mb-0'>Request failed with HTTP " + response.status + ".</p>", "error");
-        }
-    } catch (networkError) {
-        renderResult(
-            "<p class='mb-0'>Could not reach the emotion detector. Is the server running?</p>",
-            "error"
-        );
-    } finally {
-        setBusy(false);
-    }
+  } catch (networkError) {
+    renderResult(
+      "<p class='mb-0'>Could not reach the emotion detector. Is the server running?</p>",
+      "error",
+    );
+  } finally {
+    setBusy(false);
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-    document.getElementById("detectButton").addEventListener("click", RunSentimentAnalysis);
-    document.getElementById("textToAnalyze").addEventListener("keydown", (event) => {
-        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-            RunSentimentAnalysis();
-        }
+  document
+    .getElementById("detectButton")
+    .addEventListener("click", RunSentimentAnalysis);
+  document
+    .getElementById("textToAnalyze")
+    .addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        RunSentimentAnalysis();
+      }
     });
 });
