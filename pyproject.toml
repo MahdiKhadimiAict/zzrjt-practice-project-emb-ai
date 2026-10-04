@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emotion-detection-watson-nlp"
+version = "1.0.0"
+description = "Emotion detection web application for customer feedback, built on the IBM Watson NLP emotion workflow."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Embedded AI Practice Project" }]
+keywords = ["nlp", "emotion-detection", "watson", "flask", "sentiment-analysis"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Flask",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+]
+
+dependencies = [
+    "Flask>=3.0",
+    "requests>=2.31",
+    "transformers>=4.40",
+    "torch>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pylint>=3.2",
+    "build>=1.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/IBM/ibm-watson-nlp-lib"
+
+[tool.setuptools]
+packages = ["EmotionDetection"]
+py-modules = []
+
+[tool.setuptools.package-data]
+EmotionDetection = ["py.typed"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["test_emotion_detection.py"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: end-to-end checks that require a reachable emotion model backend",
+]
+
+[tool.pylint.main]
+py-version = "3.10"
+jobs = 1
+
+[tool.pylint."messages control"]
+disable = [
+    "duplicate-code",
+    "too-few-public-methods",
+]
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint.design]
+max-args = 5
+max-attributes = 7
+max-locals = 15
+max-branches = 12
+max-statements = 50
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "ex", "id", "_"]
+
+[tool.pylint.similarities]
+min-similarity-lines = 8

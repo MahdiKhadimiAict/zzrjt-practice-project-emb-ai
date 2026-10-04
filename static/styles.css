@@ -1,0 +1,25 @@
+body {
+    background-color: #f4f6f9;
+}
+
+.center-heading {
+    text-align: center;
+}
+
+.result-panel {
+    padding: 25px;
+    border-radius: 4px;
+    background-color: #ffffff;
+    border: 1px solid #e1e4e8;
+    min-height: 60px;
+}
+
+.result-success {
+    border-left: 4px solid #28a745;
+    background-color: #f1fbf3;
+}
+
+.result-error {
+    border-left: 4px solid #dc3545;
+    background-color: #fdf1f2;
+}

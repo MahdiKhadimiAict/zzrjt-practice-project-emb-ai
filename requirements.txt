@@ -1,0 +1,4 @@
+Flask>=3.0
+requests>=2.31
+transformers>=4.40
+torch>=2.2
